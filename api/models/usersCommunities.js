@@ -2,8 +2,6 @@
 const { db } = require('shared/db');
 import { sendCommunityNotificationQueue } from 'shared/bull/queues';
 import type { DBUsersCommunities, DBCommunity } from 'shared/types';
-import { events } from 'shared/analytics';
-import { trackQueue } from 'shared/bull/queues';
 import {
   incrementMemberCount,
   decrementMemberCount,
@@ -42,11 +40,6 @@ export const createOwnerInCommunity = (communityId: string, userId: string): Pro
     .run()
     .then(async result => {
       await Promise.all([
-        trackQueue.add({
-          userId,
-          event: events.USER_WAS_ADDED_AS_OWNER_IN_COMMUNITY,
-          context: { communityId }
-        }),
         incrementMemberCount(communityId)
       ])
 
@@ -58,13 +51,6 @@ export const createOwnerInCommunity = (communityId: string, userId: string): Pro
 // community
 // prettier-ignore
 export const createMemberInCommunity = (communityId: string, userId: string): Promise<DBUsersCommunities> => {
-
-  trackQueue.add({
-    userId,
-    event: events.USER_JOINED_COMMUNITY,
-    context: { communityId }
-  })
-
   return db
     .table('usersCommunities')
     .getAll([userId, communityId], { index: 'userIdAndCommunityId' })
@@ -84,6 +70,7 @@ export const createMemberInCommunity = (communityId: string, userId: string): Pr
               createdAt: new Date(),
               isMember: true,
               receiveNotifications: true,
+              lastSeen: new Date(),
             },
             { returnChanges: 'always' }
           )
@@ -97,6 +84,7 @@ export const createMemberInCommunity = (communityId: string, userId: string): Pr
               communityId,
               userId,
               createdAt: new Date(),
+              lastSeen: new Date(),
               isMember: true,
               isOwner: false,
               isModerator: false,
@@ -122,13 +110,6 @@ export const createMemberInCommunity = (communityId: string, userId: string): Pr
 // removes a single member from a community. will be invoked if a user leaves a community
 // prettier-ignore
 export const removeMemberInCommunity = (communityId: string, userId: string): Promise<DBCommunity> => {
-
-  trackQueue.add({
-    userId,
-    event: events.USER_LEFT_COMMUNITY,
-    context: { communityId }
-  })
-
   return db
     .table('usersCommunities')
     .getAll([userId, communityId], { index: 'userIdAndCommunityId'})
@@ -162,15 +143,6 @@ export const removeMembersInCommunity = async (communityId: string): Promise<?Ob
     .run()
 
   if (!usersCommunities || usersCommunities.length === 0) return
-
-  const trackingPromises = usersCommunities.map(usersCommunity => {
-    return trackQueue.add({
-      userId: usersCommunity.userId,
-      event: events.USER_LEFT_COMMUNITY,
-      context: { communityId }
-    })
-  })
-
   const leavePromise = await db
     .table('usersCommunities')
     .getAll(communityId, { index: 'communityId' })
@@ -180,8 +152,7 @@ export const removeMembersInCommunity = async (communityId: string): Promise<?Ob
     })
     .run();
 
-  return Promise.all([
-    ...trackingPromises,
+  return await Promise.all([
     setMemberCount(communityId, 0),
     leavePromise
   ])
@@ -208,11 +179,6 @@ export const blockUserInCommunity = (communityId: string, userId: string): Promi
     .run()
     .then(async result => {
       await Promise.all([
-        trackQueue.add({
-          userId,
-          event: events.USER_WAS_BLOCKED_IN_COMMUNITY,
-          context : { communityId }
-        }),
         decrementMemberCount(communityId)
       ])
       return result.changes[0].new_val
@@ -242,11 +208,6 @@ export const unblockUserInCommunity = (communityId: string, userId: string): Pro
     .then(async result => {
 
       await Promise.all([
-        trackQueue.add({
-          userId,
-          event: events.USER_WAS_UNBLOCKED_IN_COMMUNITY,
-          context: { communityId }
-        }),
         incrementMemberCount(communityId)
       ])
 
@@ -271,13 +232,6 @@ export const makeMemberModeratorInCommunity = (communityId: string, userId: stri
     )
     .run()
     .then(result => {
-
-      trackQueue.add({
-        userId,
-        event: events.USER_WAS_ADDED_AS_MODERATOR_IN_COMMUNITY,
-        context: { communityId }
-      })
-
       return result.changes[0].new_val
     });
 };
@@ -296,13 +250,6 @@ export const removeModeratorInCommunity = (communityId: string, userId: string):
     )
     .run()
     .then(result => {
-
-      trackQueue.add({
-        userId,
-        event: events.USER_WAS_REMOVED_AS_MODERATOR_IN_COMMUNITY,
-        context: { communityId }
-      })
-
       return result.changes[0].new_val
     });
 };
@@ -318,25 +265,12 @@ export const removeModeratorsInCommunity = async (communityId: string): Promise<
 
   if (!moderators || moderators.length === 0) return
 
-  const trackingPromises = moderators.map(moderator => {
-    return trackQueue.add({
-      userId: moderator.userId,
-      event: events.USER_WAS_REMOVED_AS_MODERATOR_IN_COMMUNITY,
-      context: { communityId }
-    })
-  })
-
-  const removePromise = db
+  return await db
     .table('usersCommunities')
     .getAll(communityId, { index: 'communityId' })
     .filter({ isModerator: true })
     .update({ isModerator: false }, { returnChanges: true })
     .run();
-
-  return Promise.all([
-    ...trackingPromises,
-    removePromise
-  ])
 };
 
 // invoked when a user is deleting their account or being banned
@@ -347,14 +281,6 @@ export const removeUsersCommunityMemberships = async (userId: string) => {
     .run();
 
   if (!memberships || memberships.length === 0) return;
-
-  const trackingPromises = memberships.map(member => {
-    return trackQueue.add({
-      userId,
-      event: events.USER_LEFT_COMMUNITY,
-      context: { communityId: member.communityId },
-    });
-  });
 
   const memberCountPromises = memberships.map(member => {
     return decrementMemberCount(member.communityId);
@@ -372,11 +298,7 @@ export const removeUsersCommunityMemberships = async (userId: string) => {
     })
     .run();
 
-  return Promise.all([
-    ...trackingPromises,
-    memberCountPromises,
-    removeMembershipsPromise,
-  ]);
+  return Promise.all([memberCountPromises, removeMembershipsPromise]);
 };
 
 // prettier-ignore
@@ -425,27 +347,12 @@ export const createPendingMemberInCommunity = async (communityId: string, userId
       }
     })
     .then(result => {
-      trackQueue.add({
-        userId,
-        event: events.USER_REQUESTED_TO_JOIN_COMMUNITY,
-        context: { communityId }
-      })
-
-      // TODO@PRIVATE_COMMUNITIES
-      // add queue for sending notification to community owner
-
       return result.changes[0].new_val;
     });
 }
 
 // prettier-ignore
 export const removePendingMemberInCommunity = async (communityId: string, userId: string): Promise<Object> => {
-  trackQueue.add({
-    userId,
-    event: events.USER_CANCELED_REQUEST_TO_JOIN_COMMUNITY,
-    context: { communityId }
-  })
-
   return db
     .table('usersCommunities')
     .getAll([userId, communityId], { index: 'userIdAndCommunityId'})
@@ -472,12 +379,6 @@ export const approvePendingMemberInCommunity = async (
     )
     .run()
     .then(result => {
-      trackQueue.add({
-        userId,
-        event: events.USER_WAS_APPROVED_IN_COMMUNITY,
-        context: { communityId },
-      });
-
       incrementMemberCount(communityId);
 
       return result.changes[0].new_val;
@@ -500,12 +401,6 @@ export const blockPendingMemberInCommunity = async (
     )
     .run()
     .then(result => {
-      trackQueue.add({
-        userId,
-        event: events.USER_WAS_BLOCKED_IN_COMMUNITY,
-        context: { communityId },
-      });
-
       return result.changes[0].new_val;
     });
 };
@@ -647,7 +542,7 @@ export const checkUserPermissionsInCommunity = (communityId: string, userId: str
     .run();
 };
 
-type UserIdAndCommunityId = [string, string];
+type UserIdAndCommunityId = [?string, string];
 
 // prettier-ignore
 export const getUsersPermissionsInCommunities = (input: Array<UserIdAndCommunityId>) => {
@@ -705,4 +600,27 @@ export const getUsersTotalReputation = (userIds: Array<string>): Promise<Array<n
           }
       )
     );
+};
+
+export const setCommunityLastSeen = (
+  communityId: string,
+  userId: string,
+  lastSeen: Date
+) => {
+  return db
+    .table('usersCommunities')
+    .getAll([userId, communityId], { index: 'userIdAndCommunityId' })
+    .update(
+      {
+        lastSeen: db.branch(
+          db.row('lastSeen').lt(lastSeen),
+          lastSeen,
+          db.row('lastSeen')
+        ),
+      },
+      {
+        returnChanges: true,
+      }
+    )
+    .run();
 };

@@ -13,32 +13,23 @@ import webPushManager from 'src/helpers/web-push-manager';
 import { history } from 'src/helpers/history';
 import { client } from 'shared/graphql';
 import { initStore } from 'src/store';
-import { track, events } from 'src/helpers/analytics';
 import { wsLink } from 'shared/graphql';
 import { subscribeToDesktopPush } from 'src/subscribe-to-desktop-push';
 import RedirectHandler from 'src/components/redirectHandler';
 const params = queryString.parse(history.location.search);
 
-// Always redirect ?thread=asdfxyz to the thread view
-if (params.thread) {
+// Redirect legacy ?thread=asdf & ?t=asdf URLs to the proper /<community>/<channel>/<thread>
+// equivalents via the /thread/<id> shorthand
+const threadParam = params.thread || params.t;
+if (threadParam) {
   if (params.m) {
-    history.replace(`/thread/${params.thread}?m=${params.m}`);
+    history.replace(`/thread/${threadParam}?m=${params.m}`);
   } else {
-    history.replace(`/thread/${params.thread}`);
+    history.replace(`/thread/${threadParam}`);
   }
 }
 // If the server passes an initial redux state use that, otherwise construct our own
-const store = initStore(
-  window.__SERVER_STATE__ || {
-    dashboardFeed: {
-      activeThread: params.t || '',
-      mountedWithActiveThread: params.t || '',
-      search: {
-        isOpen: false,
-      },
-    },
-  }
-);
+const store = initStore(window.__SERVER_STATE__ || {});
 
 const App = () => {
   return (
@@ -98,19 +89,6 @@ wsLink.subscriptionClient.on('connected', () =>
 wsLink.subscriptionClient.on('reconnected', () =>
   store.dispatch({ type: 'WEBSOCKET_CONNECTION', value: 'reconnected' })
 );
-
-// This fires when a user is prompted to add the app to their homescreen
-// We use it to track it happening in Google Analytics so we have those sweet metrics
-window.addEventListener('beforeinstallprompt', e => {
-  track(events.PWA_HOME_SCREEN_PROMPTED);
-  e.userChoice.then(choiceResult => {
-    if (choiceResult.outcome === 'dismissed') {
-      track(events.PWA_HOME_SCREEN_DISMISSED);
-    } else {
-      track(events.PWA_HOME_SCREEN_ADDED);
-    }
-  });
-});
 
 subscribeToDesktopPush(data => {
   if (data && data.href) history.push(data.href);

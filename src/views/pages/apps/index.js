@@ -2,12 +2,11 @@
 import * as React from 'react';
 import Section from 'src/components/themedSection';
 import PageFooter from '../components/footer';
-import { Wrapper } from '../style';
 import { Heading, Copy } from '../pricing/style';
-import { Button } from 'src/components/buttons';
-import { Intro, ActionsContainer, TextContent } from './style';
+import { PrimaryButton } from 'src/components/button';
+import Icon from 'src/components/icon';
+import { Intro, ActionsContainer, TextContent, PageWrapper } from './style';
 import type { ContextRouter } from 'react-router';
-import { track, events } from 'src/helpers/analytics';
 import Head from 'src/components/head';
 import { DESKTOP_APP_MAC_URL } from 'src/helpers/desktop-app-utils';
 
@@ -20,18 +19,14 @@ type State = {
 };
 
 class Features extends React.Component<Props, State> {
-  componentDidMount() {
-    track(events.APPS_PAGE_VIEWED);
-  }
-
   render() {
     return (
-      <Wrapper data-cy="apps-page">
+      <PageWrapper data-cy="apps-page">
         <Head
           title={'Spectrum · Apps'}
           description={'Download Spectrum for Mac and Windows'}
         />
-        <Section goop={6} color="text.default">
+        <Section goop={6} color="bg.reverse">
           <Intro>
             <TextContent>
               <Heading>Spectrum for Mac</Heading>
@@ -41,21 +36,16 @@ class Features extends React.Component<Props, State> {
               </Copy>
 
               <ActionsContainer>
-                <a href={DESKTOP_APP_MAC_URL}>
-                  <Button
-                    large
-                    icon="apple"
-                    onClick={() => track(events.APPS_PAGE_DOWNLOAD_MAC_CLICKED)}
-                  >
-                    Download for Mac
-                  </Button>
-                </a>
+                <PrimaryButton href={DESKTOP_APP_MAC_URL}>
+                  <Icon glyph={'apple'} />
+                  Download for Mac
+                </PrimaryButton>
               </ActionsContainer>
             </TextContent>
           </Intro>
         </Section>
         <PageFooter />
-      </Wrapper>
+      </PageWrapper>
     );
   }
 }

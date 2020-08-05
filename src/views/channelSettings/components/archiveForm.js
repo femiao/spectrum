@@ -2,16 +2,15 @@
 import * as React from 'react';
 import compose from 'recompose/compose';
 import { connect } from 'react-redux';
-import { openModal } from '../../../actions/modals';
-import { Button } from '../../../components/buttons';
+import { openModal } from 'src/actions/modals';
+import { OutlineButton } from 'src/components/button';
 import type { GetChannelType } from 'shared/graphql/queries/channel/getChannel';
 import {
   SectionCard,
   SectionTitle,
   SectionSubtitle,
   SectionCardFooter,
-} from '../../../components/settingsViews/style';
-import { track, events, transformations } from 'src/helpers/analytics';
+} from 'src/components/settingsViews/style';
 import type { Dispatch } from 'redux';
 
 type Props = {
@@ -32,11 +31,6 @@ class Channel extends React.Component<Props> {
       </div>
     );
 
-    track(events.CHANNEL_ARCHIVED_INITED, {
-      channel: transformations.analyticsChannel(channel),
-      community: transformations.analyticsCommunity(channel.community),
-    });
-
     return this.props.dispatch(
       openModal('DELETE_DOUBLE_CHECK_MODAL', {
         id: channel.id,
@@ -48,13 +42,6 @@ class Channel extends React.Component<Props> {
   };
 
   initRestoreChannel = () => {
-    const { channel } = this.props;
-
-    track(events.CHANNEL_RESTORED_INITED, {
-      channel: transformations.analyticsChannel(channel),
-      community: transformations.analyticsCommunity(channel.community),
-    });
-
     return this.props.dispatch(
       openModal('RESTORE_CHANNEL_MODAL', {
         channel: this.props.channel,
@@ -85,7 +72,9 @@ class Channel extends React.Component<Props> {
           )}
 
           <SectionCardFooter>
-            <Button onClick={this.initArchiveChannel}>Archive Channel</Button>
+            <OutlineButton onClick={this.initArchiveChannel}>
+              Archive Channel
+            </OutlineButton>
           </SectionCardFooter>
         </SectionCard>
       );
@@ -100,7 +89,9 @@ class Channel extends React.Component<Props> {
           </SectionSubtitle>
 
           <SectionCardFooter>
-            <Button onClick={this.initRestoreChannel}>Restore Channel</Button>
+            <OutlineButton onClick={this.initRestoreChannel}>
+              Restore Channel
+            </OutlineButton>
           </SectionCardFooter>
         </SectionCard>
       );

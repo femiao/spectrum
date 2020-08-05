@@ -1,4 +1,5 @@
 // @flow
+const debug = require('debug')('api:mutations:edit-thread');
 import type { GraphQLContext } from '../../';
 import type { EditThreadInput } from '../../models/thread';
 import UserError from '../../utils/UserError';
@@ -7,13 +8,8 @@ import { getThreads, editThread } from '../../models/thread';
 import { getUserPermissionsInCommunity } from '../../models/usersCommunities';
 import { getUserPermissionsInChannel } from '../../models/usersChannels';
 import { isAuthedResolver as requireAuth } from '../../utils/permissions';
-import { events } from 'shared/analytics';
-import { trackQueue } from 'shared/bull/queues';
-import {
-  LEGACY_PREFIX,
-  hasLegacyPrefix,
-  stripLegacyPrefix,
-} from 'shared/imgix';
+import processThreadContent from 'shared/draft-utils/process-thread-content';
+import { hasLegacyPrefix, stripLegacyPrefix } from 'shared/imgix';
 
 type Input = {
   input: EditThreadInput,
@@ -24,15 +20,6 @@ export default requireAuth(async (_: any, args: Input, ctx: GraphQLContext) => {
   const { user } = ctx;
 
   if (input.type === 'SLATE') {
-    trackQueue.add({
-      userId: user.id,
-      event: events.THREAD_EDITED_FAILED,
-      context: { threadId: input.threadId },
-      properties: {
-        reason: 'slate type',
-      },
-    });
-
     return new UserError(
       "You're on an old version of Spectrum, please refresh your browser."
     );
@@ -45,15 +32,6 @@ export default requireAuth(async (_: any, args: Input, ctx: GraphQLContext) => {
 
   // if the thread doesn't exist
   if (!threads || !threadToEvaluate) {
-    trackQueue.add({
-      userId: user.id,
-      event: events.THREAD_EDITED_FAILED,
-      context: { threadId: input.threadId },
-      properties: {
-        reason: 'thread does not exist',
-      },
-    });
-
     return new UserError("This thread doesn't exist");
   }
 
@@ -62,26 +40,21 @@ export default requireAuth(async (_: any, args: Input, ctx: GraphQLContext) => {
     getUserPermissionsInChannel(threadToEvaluate.channelId, user.id),
   ]);
 
+  const canEdit =
+    !channelPermissions.isBlocked &&
+    !communityPermissions.isBlocked &&
+    (threadToEvaluate.creatorId === user.id ||
+      communityPermissions.isModerator ||
+      communityPermissions.isOwner);
   // only the thread creator can edit the thread
   // also prevent deletion if the user was blocked
-  if (
-    threadToEvaluate.creatorId !== user.id ||
-    channelPermissions.isBlocked ||
-    communityPermissions.isBlocked
-  ) {
-    trackQueue.add({
-      userId: user.id,
-      event: events.THREAD_EDITED_FAILED,
-      context: { threadId: input.threadId },
-      properties: {
-        reason: 'no permission',
-      },
-    });
-
+  if (!canEdit) {
     return new UserError(
       "You don't have permission to make changes to this thread."
     );
   }
+
+  input.content.body = processThreadContent('TEXT', input.content.body || '');
 
   /*
     When threads are sent to the client, all image urls are signed and proxied
@@ -130,6 +103,7 @@ export default requireAuth(async (_: any, args: Input, ctx: GraphQLContext) => {
     });
   }
 
+  debug('store new body to database:', initialBody);
   const newInput = Object.assign({}, input, {
     ...input,
     content: {
@@ -151,15 +125,6 @@ export default requireAuth(async (_: any, args: Input, ctx: GraphQLContext) => {
       )
     );
   } catch (err) {
-    trackQueue.add({
-      userId: user.id,
-      event: events.THREAD_EDITED_FAILED,
-      context: { threadId: input.threadId },
-      properties: {
-        reason: 'images failed to upload',
-      },
-    });
-
     return new UserError(err.message);
   }
 

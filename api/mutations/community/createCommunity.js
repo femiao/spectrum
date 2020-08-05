@@ -2,39 +2,28 @@
 import type { GraphQLContext } from '../../';
 import type { CreateCommunityInput } from '../../models/community';
 import UserError from '../../utils/UserError';
-import { communitySlugIsBlacklisted } from '../../utils/permissions';
-import { getCommunitiesBySlug, createCommunity } from '../../models/community';
+import { communitySlugIsDenyListed } from '../../utils/permissions';
+import {
+  getCommunitiesBySlug,
+  createCommunity,
+  setCommunityWatercoolerId,
+} from '../../models/community';
 import { createOwnerInCommunity } from '../../models/usersCommunities';
 import { createGeneralChannel } from '../../models/channel';
 import { createOwnerInChannel } from '../../models/usersChannels';
+import { publishThread } from '../../models/thread';
 import { isAuthedResolver as requireAuth } from '../../utils/permissions';
-import { trackQueue } from 'shared/bull/queues';
-import { events } from 'shared/analytics';
+import Raven from 'shared/raven';
 
 export default requireAuth(
   async (_: any, args: CreateCommunityInput, { user }: GraphQLContext) => {
     if (!user.email) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.COMMUNITY_CREATED_FAILED,
-        properties: {
-          reason: 'no email address',
-        },
-      });
       return new UserError(
         'You must have a working email address to create communities. Add an email address in your settings.'
       );
     }
 
     if (!args.input.slug || args.input.slug.length === 0) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.COMMUNITY_CREATED_FAILED,
-        properties: {
-          reason: 'no slug',
-        },
-      });
-
       return new UserError(
         'Communities must have a valid url so people can find it!'
       );
@@ -57,15 +46,7 @@ export default requireAuth(
       }
     );
 
-    if (communitySlugIsBlacklisted(sanitizedSlug)) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.COMMUNITY_CREATED_FAILED,
-        properties: {
-          reason: 'url taken',
-        },
-      });
-
+    if (communitySlugIsDenyListed(sanitizedSlug)) {
       return new UserError(
         `This url is already taken - feel free to change it if
         you're set on the name ${args.input.name}!`
@@ -77,14 +58,6 @@ export default requireAuth(
 
     // if a community with this slug already exists
     if (communities.length > 0) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.COMMUNITY_CREATED_FAILED,
-        properties: {
-          reason: 'community already exists',
-        },
-      });
-
       return new UserError('A community with this slug already exists.');
     }
 
@@ -92,23 +65,33 @@ export default requireAuth(
     const community = await createCommunity(sanitizedArgs, user);
 
     // create a new relationship with the community
-    const communityRelationship = await createOwnerInCommunity(
-      community.id,
-      user.id
-    );
+    await createOwnerInCommunity(community.id, user.id);
 
     // create a default 'general' channel
     const generalChannel = await createGeneralChannel(community.id, user.id);
 
     // create a new relationship with the general channel
-    const generalChannelRelationship = createOwnerInChannel(
-      generalChannel.id,
-      user.id
-    );
+    await createOwnerInChannel(generalChannel.id, user.id);
 
-    return Promise.all([
-      communityRelationship,
-      generalChannelRelationship,
-    ]).then(() => community);
+    try {
+      const watercooler = await publishThread(
+        {
+          channelId: generalChannel.id,
+          communityId: community.id,
+          content: {
+            title: `${community.name} watercooler`,
+          },
+          type: 'DRAFTJS',
+          watercooler: true,
+        },
+        user.id
+      );
+
+      return setCommunityWatercoolerId(community.id, watercooler.id);
+      // Do not fail community creation if the watercooler creation does not work out
+    } catch (err) {
+      Raven.captureException(err);
+      return community;
+    }
   }
 );

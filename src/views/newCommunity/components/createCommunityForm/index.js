@@ -10,14 +10,17 @@ import { Notice } from 'src/components/listItems/style';
 import { CommunityAvatar } from 'src/components/avatar';
 import { throttle } from 'src/helpers/utils';
 import { addToastWithTimeout } from 'src/actions/toasts';
-import { COMMUNITY_SLUG_BLACKLIST } from 'shared/slug-blacklists';
+import { COMMUNITY_SLUG_DENY_LIST } from 'shared/slug-deny-lists';
 import createCommunityMutation from 'shared/graphql/mutations/community/createCommunity';
 import type { CreateCommunityType } from 'shared/graphql/mutations/community/createCommunity';
 import { getCommunityBySlugQuery } from 'shared/graphql/queries/community/getCommunity';
 import { searchCommunitiesQuery } from 'shared/graphql/queries/search/searchCommunities';
-import { Button } from 'src/components/buttons';
-import { CommunityHoverProfile } from 'src/components/hoverProfile';
-import Icon from 'src/components/icons';
+import { PrimaryOutlineButton } from 'src/components/button';
+import {
+  whiteSpaceRegex,
+  oddHyphenRegex,
+} from 'src/views/viewHelpers/textValidationHelper';
+import Icon from 'src/components/icon';
 
 import {
   Input,
@@ -27,7 +30,7 @@ import {
   CoverInput,
   Error,
   Checkbox,
-} from '../../../../components/formElements';
+} from 'src/components/formElements';
 import {
   ImageInputWrapper,
   Spacer,
@@ -42,7 +45,6 @@ import {
   DeleteCoverButton,
 } from './style';
 import { FormContainer, Form, Actions } from '../../style';
-import { track, events } from 'src/helpers/analytics';
 import type { Dispatch } from 'redux';
 
 type State = {
@@ -101,10 +103,6 @@ class CreateCommunityForm extends React.Component<Props, State> {
     this.checkSlug = throttle(this.checkSlug, 500);
   }
 
-  componentDidMount() {
-    track(events.COMMUNITY_CREATED_INITED);
-  }
-
   changeName = e => {
     const { communitySuggestions } = this.state;
     if (communitySuggestions) {
@@ -124,7 +122,9 @@ class CreateCommunityForm extends React.Component<Props, State> {
       .replace(/-{2,}/g, '-');
     let slug = slugg(lowercaseName);
 
-    if (name.length >= 20) {
+    let hasInvalidChars = name.search(whiteSpaceRegex) >= 0;
+    let hasOddHyphens = name.search(oddHyphenRegex) >= 0;
+    if (hasInvalidChars || hasOddHyphens || name.length > 20) {
       this.setState({
         nameError: true,
       });
@@ -132,7 +132,7 @@ class CreateCommunityForm extends React.Component<Props, State> {
       return;
     }
 
-    if (COMMUNITY_SLUG_BLACKLIST.indexOf(slug) > -1) {
+    if (COMMUNITY_SLUG_DENY_LIST.indexOf(slug) > -1) {
       this.setState({
         name,
         slug,
@@ -172,7 +172,7 @@ class CreateCommunityForm extends React.Component<Props, State> {
       return;
     }
 
-    if (COMMUNITY_SLUG_BLACKLIST.indexOf(slug) > -1) {
+    if (COMMUNITY_SLUG_DENY_LIST.indexOf(slug) > -1) {
       this.setState({
         slug,
         slugTaken: true,
@@ -199,7 +199,7 @@ class CreateCommunityForm extends React.Component<Props, State> {
         },
       })
       .then(({ data }) => {
-        if (COMMUNITY_SLUG_BLACKLIST.indexOf(this.state.slug) > -1) {
+        if (COMMUNITY_SLUG_DENY_LIST.indexOf(this.state.slug) > -1) {
           return this.setState({
             slugTaken: true,
           });
@@ -275,7 +275,10 @@ class CreateCommunityForm extends React.Component<Props, State> {
 
   changeDescription = e => {
     const description = e.target.value;
-    if (description.length >= 140) {
+
+    let hasInvalidChars = description.search(whiteSpaceRegex) >= 0;
+    let hasOddHyphens = description.search(oddHyphenRegex) >= 0;
+    if (hasInvalidChars || hasOddHyphens || description.length >= 140) {
       this.setState({
         descriptionError: true,
       });
@@ -386,7 +389,6 @@ class CreateCommunityForm extends React.Component<Props, State> {
       photoSizeError ||
       !name ||
       !slug ||
-      !description ||
       !agreeCoC
     ) {
       this.setState({
@@ -514,7 +516,10 @@ class CreateCommunityForm extends React.Component<Props, State> {
           </Input>
 
           {nameError && (
-            <Error>Community names can be up to 20 characters long.</Error>
+            <Error>
+              Community name has to be between 1 and 20 characters long and
+              can`t have invalid characters.
+            </Error>
           )}
 
           <UnderlineInput
@@ -553,21 +558,16 @@ class CreateCommunityForm extends React.Component<Props, State> {
               communitySuggestions.map(suggestion => {
                 return (
                   <Link to={`/${suggestion.slug}`} key={suggestion.id}>
-                    <CommunityHoverProfile
-                      id={suggestion.id}
-                      style={{ flex: '1 0 auto' }}
-                    >
-                      <CommunitySuggestion>
-                        <CommunityAvatar
-                          size={20}
-                          community={suggestion}
-                          isClickable={false}
-                          showHoverProfile={false}
-                        />
-                        <strong>{suggestion.name}</strong>{' '}
-                        {suggestion.metaData.members.toLocaleString()} members
-                      </CommunitySuggestion>
-                    </CommunityHoverProfile>
+                    <CommunitySuggestion>
+                      <CommunityAvatar
+                        size={20}
+                        community={suggestion}
+                        isClickable={false}
+                        showHoverProfile={false}
+                      />
+                      <strong>{suggestion.name}</strong>{' '}
+                      {suggestion.metaData.members.toLocaleString()} members
+                    </CommunitySuggestion>
                   </Link>
                 );
               })}
@@ -583,7 +583,8 @@ class CreateCommunityForm extends React.Component<Props, State> {
 
           {descriptionError && (
             <Error>
-              Oop, that’s more than 140 characters - try trimming that up.
+              Oops, there may be some invalid characters or the text is too big
+              (max: 140 characters) - try trimming that up.
             </Error>
           )}
 
@@ -647,11 +648,6 @@ class CreateCommunityForm extends React.Component<Props, State> {
                 href="https://github.com/withspectrum/code-of-conduct"
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={() =>
-                  track(events.CODE_OF_CONDUCT_CLICKED, {
-                    location: 'community onboarding',
-                  })
-                }
               >
                 Spectrum Code of Conduct
               </a>{' '}
@@ -668,7 +664,7 @@ class CreateCommunityForm extends React.Component<Props, State> {
 
         <Actions>
           <div />
-          <Button
+          <PrimaryOutlineButton
             onClick={this.create}
             disabled={
               slugTaken ||
@@ -677,14 +673,13 @@ class CreateCommunityForm extends React.Component<Props, State> {
               createError ||
               descriptionError ||
               !name ||
-              !description ||
               !agreeCoC
             }
             loading={isLoading}
-            dataCy="community-create-button"
+            data-cy="community-create-button"
           >
-            Create Community & Continue
-          </Button>
+            {isLoading ? 'Creating...' : 'Create Community & Continue'}
+          </PrimaryOutlineButton>
         </Actions>
       </FormContainer>
     );

@@ -1,11 +1,10 @@
 // @flow
 const debug = require('debug')('api:mutations:thread:publish-thread');
 import stringSimilarity from 'string-similarity';
-import { convertToRaw } from 'draft-js';
-import { stateFromMarkdown } from 'draft-js-import-markdown';
 import type { GraphQLContext } from '../../';
 import UserError from '../../utils/UserError';
 import { uploadImage } from '../../utils/file-storage';
+import processThreadContent from 'shared/draft-utils/process-thread-content';
 import {
   publishThread,
   editThread,
@@ -14,15 +13,14 @@ import {
 import { createParticipantInThread } from '../../models/usersThreads';
 import type { FileUpload, DBThread } from 'shared/types';
 import { toPlainText, toState } from 'shared/draft-utils';
+import { setCommunityLastActive } from '../../models/community';
+import { setCommunityLastSeen } from '../../models/usersCommunities';
 import {
   processReputationEventQueue,
   sendThreadNotificationQueue,
   _adminProcessToxicThreadQueue,
-  _adminProcessUserSpammingThreadsQueue,
 } from 'shared/bull/queues';
 import getPerspectiveScore from 'athena/queues/moderationEvents/perspective';
-import { events } from 'shared/analytics';
-import { trackQueue } from 'shared/bull/queues';
 import { isAuthedResolver as requireAuth } from '../../utils/permissions';
 
 const threadBodyToPlainText = (body: any): string =>
@@ -54,36 +52,16 @@ export default requireAuth(
     let { type } = thread;
 
     if (type === 'SLATE') {
-      trackQueue.add({
-        userId: user.id,
-        event: events.THREAD_CREATED_FAILED,
-        context: { channelId: thread.channelId },
-        properties: {
-          reason: 'slate type',
-        },
-      });
-
       return new UserError(
         "You're on an old version of Spectrum, please refresh your browser."
       );
     }
 
-    if (type === 'TEXT') {
-      type = 'DRAFTJS';
-      if (thread.content.body) {
-        thread.content.body = JSON.stringify(
-          convertToRaw(
-            stateFromMarkdown(thread.content.body, {
-              parserOptions: {
-                breaks: true,
-              },
-            })
-          )
-        );
-      }
+    if (thread.content.body) {
+      thread.content.body = processThreadContent(type, thread.content.body);
     }
 
-    thread.type = type;
+    thread.type = 'DRAFTJS';
 
     const [
       currentUserChannelPermissions,
@@ -100,42 +78,19 @@ export default requireAuth(
     ]);
 
     if (!community || community.deletedAt) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.THREAD_CREATED_FAILED,
-        context: { channelId: thread.channelId },
-        properties: {
-          reason: 'community doesn’t exist',
-        },
-      });
-
       return new UserError('This community doesn’t exist');
+    }
+
+    if (community.redirect) {
+      return new UserError('This community is no longer on Spectrum.');
     }
 
     // if channel wasn't found or is deleted
     if (!channel || channel.deletedAt) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.THREAD_CREATED_FAILED,
-        context: { channelId: thread.channelId },
-        properties: {
-          reason: 'channel doesn’t exist',
-        },
-      });
-
       return new UserError("This channel doesn't exist");
     }
 
     if (channel.isArchived) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.THREAD_CREATED_FAILED,
-        context: { channelId: thread.channelId },
-        properties: {
-          reason: 'channel archived',
-        },
-      });
-
       return new UserError('This channel has been archived');
     }
 
@@ -145,15 +100,6 @@ export default requireAuth(
       currentUserChannelPermissions.isBlocked ||
       currentUserCommunityPermissions.isBlocked
     ) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.THREAD_CREATED_FAILED,
-        context: { channelId: thread.channelId },
-        properties: {
-          reason: 'no permission',
-        },
-      });
-
       return new UserError(
         "You don't have permission to create threads in this channel."
       );
@@ -177,24 +123,6 @@ export default requireAuth(
 
       if (usersPreviousPublishedThreads.length >= MEMBER_SPAM_LMIT) {
         debug('User has posted at least 3 times in the previous 10m');
-        _adminProcessUserSpammingThreadsQueue.add({
-          user: user,
-          threads: usersPreviousPublishedThreads,
-          // $FlowIssue
-          publishing: thread,
-          community: community,
-          channel: channel,
-        });
-
-        trackQueue.add({
-          userId: user.id,
-          event: events.THREAD_CREATED_FAILED,
-          context: { channelId: thread.channelId },
-          properties: {
-            reason: 'user spamming threads',
-          },
-        });
-
         return new UserError(
           'You’ve been posting a lot! Please wait a few minutes before posting more.'
         );
@@ -202,6 +130,12 @@ export default requireAuth(
 
       const checkForSpam = usersPreviousPublishedThreads.map(t => {
         if (!t) return false;
+        if (
+          usersPreviousPublishedThreads.length === 1 &&
+          usersPreviousPublishedThreads[0] &&
+          usersPreviousPublishedThreads[0].deletedAt
+        )
+          return false;
 
         const incomingTitle = thread.content.title;
         const thisTitle = t.content.title;
@@ -234,21 +168,6 @@ export default requireAuth(
 
       if (isSpamming) {
         debug('User is spamming similar content');
-
-        trackQueue.add({
-          userId: user.id,
-          event: events.THREAD_FLAGGED_AS_SPAM,
-          context: { channelId: thread.channelId },
-        });
-
-        _adminProcessUserSpammingThreadsQueue.add({
-          user: user,
-          threads: usersPreviousPublishedThreads,
-          // $FlowIssue
-          publishing: thread,
-          community: community,
-          channel: channel,
-        });
 
         return new UserError(
           'It looks like you’ve been posting about a similar topic recently - please wait a while before posting more.'
@@ -311,12 +230,6 @@ export default requireAuth(
         'Thread determined to be toxic, not sending notifications or adding rep'
       );
 
-      trackQueue.add({
-        userId: user.id,
-        event: events.THREAD_FLAGGED_AS_TOXIC,
-        context: { threadId: dbThread.id },
-      });
-
       // generate an alert for admins
       _adminProcessToxicThreadQueue.add({ thread: dbThread });
       processReputationEventQueue.add({
@@ -335,8 +248,19 @@ export default requireAuth(
       });
     }
 
-    // create a relationship between the thread and the author
-    await createParticipantInThread(dbThread.id, user.id);
+    // create a relationship between the thread and the author and set community lastActive
+    const timestamp = new Date(dbThread.createdAt).getTime();
+    await Promise.all([
+      createParticipantInThread(dbThread.id, user.id),
+      setCommunityLastActive(dbThread.communityId, new Date(timestamp)),
+      // Make sure Community.lastSeen > Community.lastActive by one second
+      // for the author
+      setCommunityLastSeen(
+        dbThread.communityId,
+        user.id,
+        new Date(timestamp + 1000)
+      ),
+    ]);
 
     if (!thread.filesToUpload || thread.filesToUpload.length === 0) {
       return dbThread;
@@ -352,22 +276,13 @@ export default requireAuth(
         )
       );
     } catch (err) {
-      trackQueue.add({
-        userId: user.id,
-        event: events.THREAD_CREATED_FAILED,
-        context: { channelId: thread.channelId },
-        properties: {
-          reason: 'images failed to upload',
-        },
-      });
-
       return new UserError(err.message);
     }
 
     // Replace the local image srcs with the remote image src
     const body = dbThread.content.body && JSON.parse(dbThread.content.body);
-
     if (!body) return dbThread;
+
     const imageKeys = Object.keys(body.entityMap).filter(
       key => body.entityMap[key].type.toLowerCase() === 'image'
     );

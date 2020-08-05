@@ -369,17 +369,6 @@ export type SendSlackInvitationsJobData = {
   userId: string,
 };
 
-export type TrackAnalyticsData = {
-  userId: string,
-  event: string,
-  context?: Object,
-  properties?: Object,
-};
-
-export type IdentifyAnalyticsData = {
-  userId: string,
-};
-
 export type AdminProcessUserReportedJobData = {
   userId: string,
   reason: string,
@@ -497,10 +486,6 @@ export type Queues = {
   processReputationEventQueue: BullQueue<ReputationEventJobData>,
   calculateThreadScoreQueue: BullQueue<CalculateThreadScoreJobData>,
 
-  // analytics
-  trackQueue: BullQueue<TrackAnalyticsData>,
-  identifyQueue: BullQueue<IdentifyAnalyticsData>,
-
   // vulcan
   searchQueue: BullQueue<SearchIndexJobData>,
 
@@ -522,4 +507,6 @@ export type Queues = {
   dailyCoreMetricsQueue: BullQueue<void>,
   activeCommunityReportQueue: BullQueue<void>,
   removeSeenUsersNotificationsQueue: BullQueue<void>,
+  databaseBackupQueue: BullQueue<void>,
+  offsiteBackupQueue: BullQueue<void>,
 };

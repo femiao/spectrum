@@ -14,7 +14,9 @@ import path from 'path';
 import { getUserById } from 'shared/db/queries/user';
 import Raven from 'shared/raven';
 import toobusy from 'shared/middlewares/toobusy';
+import rateLimiter from 'shared/middlewares/rate-limiter';
 import addSecurityMiddleware from 'shared/middlewares/security';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 
 const PORT = process.env.PORT || 3006;
 const ONE_HOUR = 3600;
@@ -31,6 +33,71 @@ app.use(toobusy);
 
 // Security middleware.
 addSecurityMiddleware(app, { enableNonce: true, enableCSP: true });
+
+app.use(
+  ['/api', '/api/**'],
+  createProxyMiddleware({
+    target: 'https://api.spectrum.chat',
+    changeOrigin: true,
+  })
+);
+
+app.use(
+  ['/auth', '/auth/**'],
+  createProxyMiddleware({
+    target: 'https://api.spectrum.chat',
+    changeOrigin: true,
+  })
+);
+
+app.use(
+  ['/websocket', '/websocket/**'],
+  createProxyMiddleware({
+    target: 'https://api.spectrum.chat',
+    changeOrigin: true,
+    ws: true,
+  })
+);
+
+// Serve static files from the build folder
+app.use(
+  express.static(
+    process.env.NODE_ENV === 'production'
+      ? './build'
+      : path.join(__dirname, '../build/'),
+    {
+      index: false,
+      setHeaders: (res, path) => {
+        // Don't cache the serviceworker in the browser
+        if (path.indexOf('sw.js') > -1) {
+          res.setHeader('Cache-Control', 'no-store, no-cache');
+          return;
+        }
+
+        if (path.endsWith('.js')) {
+          // Cache static files in now CDN for seven days
+          // (the filename changes if the file content changes, so we can cache these forever)
+          res.setHeader('Cache-Control', `s-maxage=${ONE_HOUR}`);
+        }
+      },
+    }
+  )
+);
+
+// In dev the static files from the root public folder aren't moved to the build folder by create-react-app
+// so we just tell Express to serve those too
+if (process.env.NODE_ENV === 'development') {
+  app.use(
+    express.static(path.resolve(__dirname, '..', 'public'), { index: false })
+  );
+}
+
+app.use(
+  rateLimiter({
+    max: 13,
+    duration: '20s',
+  })
+);
 
 import bodyParser from 'body-parser';
 app.use(bodyParser.json());
@@ -49,34 +116,6 @@ if (process.env.NODE_ENV === 'production' && !process.env.FORCE_DEV) {
 // Cross origin request support
 import cors from 'shared/middlewares/cors';
 app.use(cors);
-
-// Redirect requests to /api and /auth to the production API
-// This allows deploy previews to work, as this route would only be called
-// if there's no path alias in Now for hyperionurl.com/api, which would only
-// happen on deploy previews
-app.use('/api', (req: express$Request, res: express$Response) => {
-  const redirectUrl = `${req.baseUrl}${req.path}`;
-  res.redirect(
-    req.method === 'POST' || req.xhr ? 307 : 301,
-    `https://spectrum.chat${redirectUrl}`
-  );
-});
-
-app.use('/auth', (req: express$Request, res: express$Response) => {
-  const redirectUrl = `${req.baseUrl}${req.path}`;
-  res.redirect(
-    req.method === 'POST' || req.xhr ? 307 : 301,
-    `https://spectrum.chat${redirectUrl}`
-  );
-});
-
-app.use('/websocket', (req: express$Request, res: express$Response) => {
-  const redirectUrl = `${req.baseUrl}${req.path}`;
-  res.redirect(
-    req.method === 'POST' || req.xhr ? 307 : 301,
-    `https://spectrum.chat${redirectUrl}`
-  );
-});
 
 // In development the Webpack HMR server requests /sockjs-node constantly,
 // so let's patch that through to it!
@@ -106,7 +145,7 @@ passport.deserializeUser((data, done) => {
   try {
     const user = JSON.parse(data);
     // Make sure more than the user ID is in the data by checking any other required
-    // field for existance
+    // field for existence
     if (user.id && user.createdAt) {
       return done(null, user);
     }
@@ -128,63 +167,6 @@ app.use(passport.session());
 // This needs to come after passport otherwise we'll always redirect logged-in users
 import threadParamRedirect from 'shared/middlewares/thread-param';
 app.use(threadParamRedirect);
-
-// Static files
-// This route handles the case where our ServiceWorker requests main.asdf123.js, but
-// we've deployed a new version of the app so the filename changed to main.dfyt975.js
-let jsFiles;
-try {
-  jsFiles = fs.readdirSync(
-    path.resolve(__dirname, '..', 'build', 'static', 'js')
-  );
-} catch (err) {
-  // In development that folder might not exist, so ignore errors here
-  console.error(err);
-}
-app.use(
-  express.static(path.resolve(__dirname, '..', 'build'), {
-    index: false,
-    setHeaders: (res, path) => {
-      // Don't cache the serviceworker in the browser
-      if (path.indexOf('sw.js') > -1) {
-        res.setHeader('Cache-Control', 'no-store, no-cache');
-        return;
-      }
-
-      if (path.endsWith('.js')) {
-        // Cache static files in now CDN for seven days
-        // (the filename changes if the file content changes, so we can cache these forever)
-        res.setHeader('Cache-Control', `s-maxage=${ONE_HOUR}`);
-      }
-    },
-  })
-);
-app.get('/static/js/:name', (req: express$Request, res, next) => {
-  if (!req.params.name) return next();
-  const existingFile = jsFiles.find(file => file.startsWith(req.params.name));
-  if (existingFile) {
-    if (existingFile.endsWith('.js')) {
-      res.setHeader('Cache-Control', `s-maxage=${ONE_HOUR}`);
-    }
-    return res.sendFile(
-      path.resolve(__dirname, '..', 'build', 'static', 'js', req.params.name)
-    );
-  }
-  // Match the first part of the file name, i.e. from "UserSettings.asdf123.chunk.js" match "UserSettings"
-  const match = req.params.name.match(/(\w+?)\..+js/i);
-  if (!match) return next();
-  const actualFilename = jsFiles.find(file => file.startsWith(match[1]));
-  if (!actualFilename) return next();
-  res.redirect(`/static/js/${actualFilename}`);
-});
-
-// In dev the static files from the root public folder aren't moved to the build folder by create-react-app
-// so we just tell Express to serve those too
-if (process.env.NODE_ENV === 'development') {
-  app.use(
-    express.static(path.resolve(__dirname, '..', 'public'), { index: false })
-  );
-}
 
 app.get('*', (req: express$Request, res, next) => {
   // Electron requests should only be client-side rendered

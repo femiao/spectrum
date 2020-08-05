@@ -15,12 +15,15 @@ import {
   type GetUserCommunityConnectionType,
 } from 'shared/graphql/queries/user/getUserCommunityConnection';
 import viewNetworkHandler from 'src/components/viewNetworkHandler';
-import { Button, TextButton, OutlineButton } from 'src/components/buttons';
+import {
+  HoverWarnOutlineButton,
+  WarnButton,
+  OutlineButton,
+} from 'src/components/button';
 import deleteCurrentUserMutation from 'shared/graphql/mutations/user/deleteCurrentUser';
 import { SERVER_URL } from 'src/api/constants';
 import { Link } from 'react-router-dom';
 import { Loading } from 'src/components/loading';
-import { track, events } from 'src/helpers/analytics';
 import type { Dispatch } from 'redux';
 
 type State = {
@@ -59,7 +62,6 @@ class DeleteAccountForm extends React.Component<Props, State> {
   }
 
   initDelete = () => {
-    track(events.USER_DELETED_INITED);
     this.setState({ deleteInited: true });
   };
 
@@ -69,8 +71,6 @@ class DeleteAccountForm extends React.Component<Props, State> {
     this.setState({
       isLoading: true,
     });
-
-    track(events.USER_DELETED);
 
     this.props
       .deleteCurrentUser()
@@ -118,31 +118,29 @@ class DeleteAccountForm extends React.Component<Props, State> {
               >
                 {!isLoading && (
                   <OutlineButton
-                    dataCy="delete-account-cancel-button"
+                    data-cy="delete-account-cancel-button"
                     onClick={this.cancelDelete}
                     style={{ marginBottom: '16px', alignSelf: 'stretch' }}
                   >
                     Cancel
                   </OutlineButton>
                 )}
-                <Button
-                  dataCy="delete-account-confirm-button"
+                <WarnButton
+                  data-cy="delete-account-confirm-button"
                   loading={isLoading}
-                  disabled={isLoading}
-                  gradientTheme={'warn'}
                   onClick={this.confirmDelete}
                 >
-                  Confirm and delete my account
-                </Button>
+                  {isLoading ? 'Deleting...' : 'Confirm and delete my account'}
+                </WarnButton>
               </div>
             ) : (
-              <TextButton
-                dataCy="delete-account-init-button"
+              <HoverWarnOutlineButton
+                data-cy="delete-account-init-button"
                 color={'warn.default'}
                 onClick={this.initDelete}
               >
                 Delete my account
-              </TextButton>
+              </HoverWarnOutlineButton>
             )}
           </SectionCardFooter>
         </SectionCard>

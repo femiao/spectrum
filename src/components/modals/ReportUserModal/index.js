@@ -7,10 +7,9 @@ import { closeModal } from 'src/actions/modals';
 import { addToastWithTimeout } from 'src/actions/toasts';
 import type { GetUserType } from 'shared/graphql/queries/user/getUser';
 import reportUserMutation from 'shared/graphql/mutations/user/reportUser';
-import { track, events } from 'src/helpers/analytics';
 import type { Dispatch } from 'redux';
 import ModalContainer from '../modalContainer';
-import { TextButton, Button } from '../../buttons';
+import { TextButton, PrimaryOutlineButton } from 'src/components/button';
 import { modalStyles } from '../styles';
 import { TextArea, Error } from '../../formElements';
 import { Form, Actions } from './style';
@@ -36,14 +35,6 @@ class ReportUserModal extends React.Component<Props, State> {
     reasonError: false,
     isLoading: false,
   };
-
-  componentDidMount() {
-    const { user, currentUser } = this.props;
-    track(events.USER_REPORTED_USER_INITED, {
-      reportedUser: user.id,
-      reportingUser: currentUser.id,
-    });
-  }
 
   close = () => {
     this.props.dispatch(closeModal());
@@ -136,13 +127,13 @@ class ReportUserModal extends React.Component<Props, State> {
 
             <Actions>
               <TextButton onClick={this.close}>Cancel</TextButton>
-              <Button
+              <PrimaryOutlineButton
                 disabled={!reason || reason.length === 0}
                 loading={isLoading}
                 onClick={this.submit}
               >
-                Send report
-              </Button>
+                {isLoading ? 'Sending...' : 'Send report'}
+              </PrimaryOutlineButton>
             </Actions>
           </Form>
         </ModalContainer>

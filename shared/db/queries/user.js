@@ -2,13 +2,9 @@
 import { createReadQuery, createWriteQuery, db } from 'shared/db';
 import { uploadImage } from 'api/utils/file-storage';
 import { createNewUsersSettings } from 'api/models/usersSettings';
-import {
-  sendNewUserWelcomeEmailQueue,
-  trackQueue,
-  identifyQueue,
-  searchQueue,
-} from 'shared/bull/queues';
-import { events } from 'shared/analytics';
+import { sendNewUserWelcomeEmailQueue, searchQueue } from 'shared/bull/queues';
+import { deleteThread } from 'api/models/thread';
+import { deleteMessage } from 'api/models/message';
 import { removeUsersCommunityMemberships } from 'api/models/usersCommunities';
 import { removeUsersChannelMemberships } from 'api/models/usersChannels';
 import { disableAllThreadNotificationsForUser } from 'api/models/usersThreads';
@@ -123,8 +119,6 @@ export const storeUser = createWriteQuery((user: Object) => ({
     .run()
     .then(res => {
       const dbUser = res.changes[0].new_val || res.changes[0].old_val;
-      identifyQueue.add({ userId: dbUser.id });
-      trackQueue.add({ userId: dbUser.id, event: events.USER_CREATED });
       sendNewUserWelcomeEmailQueue.add({ user: dbUser });
 
       if (dbUser.username) {
@@ -170,16 +164,6 @@ export const saveUserProvider = createWriteQuery(
           if (!user)
             throw new Error(`Failed to update user with ID ${userId}.`);
 
-          trackQueue.add({
-            userId: userId,
-            event: events.USER_ADDED_PROVIDER,
-            properties: {
-              providerMethod,
-            },
-          });
-
-          identifyQueue.add({ userId });
-
           return user;
         }
       ),
@@ -222,7 +206,9 @@ export const createOrFindUser = (user: Object, providerMethod: string): Promise<
       if (storedUser && storedUser.id) {
         return Promise.resolve(storedUser);
       }
-
+      
+      // restrict new signups to github auth only
+      if (providerMethod !== 'githubProviderId') return Promise.resolve(null)
       // if no user exists, create a new one with the oauth profile data
       return storeUser(user);
     })
@@ -231,6 +217,8 @@ export const createOrFindUser = (user: Object, providerMethod: string): Promise<
         console.error(err);
         return null;
       }
+
+      if (providerMethod !== 'githubProviderId') return null
       return storeUser(user);
     });
 };
@@ -354,26 +342,11 @@ export const editUser = createWriteQuery(
                       .then(result => {
                         // if an update happened
                         if (result.replaced === 1) {
-                          trackQueue.add({
-                            userId,
-                            event: events.USER_EDITED,
-                          });
-
-                          identifyQueue.add({ userId });
-
                           return result.changes[0].new_val;
                         }
 
                         // an update was triggered from the client, but no data was changed
                         if (result.unchanged === 1) {
-                          trackQueue.add({
-                            userId,
-                            event: events.USER_EDITED_FAILED,
-                            properties: {
-                              reason: 'no changes',
-                            },
-                          });
-
                           return result.changes[0].old_val;
                         }
                       })
@@ -402,26 +375,11 @@ export const editUser = createWriteQuery(
                       .then(result => {
                         // if an update happened
                         if (result.replaced === 1) {
-                          trackQueue.add({
-                            userId,
-                            event: events.USER_EDITED,
-                          });
-
-                          identifyQueue.add({ userId });
-
                           return result.changes[0].new_val;
                         }
 
                         // an update was triggered from the client, but no data was changed
                         if (result.unchanged === 1) {
-                          trackQueue.add({
-                            userId,
-                            event: events.USER_EDITED_FAILED,
-                            properties: {
-                              reason: 'no changes',
-                            },
-                          });
-
                           return result.changes[0].old_val;
                         }
                       })
@@ -464,26 +422,11 @@ export const editUser = createWriteQuery(
                     .then(result => {
                       // if an update happened
                       if (result.replaced === 1) {
-                        trackQueue.add({
-                          userId,
-                          event: events.USER_EDITED,
-                        });
-
-                        identifyQueue.add({ userId });
-
                         return result.changes[0].new_val;
                       }
 
                       // an update was triggered from the client, but no data was changed
                       if (result.unchanged === 1) {
-                        trackQueue.add({
-                          userId,
-                          event: events.USER_EDITED_FAILED,
-                          properties: {
-                            reason: 'no changes',
-                          },
-                        });
-
                         return result.changes[0].old_val;
                       }
                     })
@@ -504,25 +447,11 @@ export const editUser = createWriteQuery(
               .then(result => {
                 // if an update happened
                 if (result.replaced === 1) {
-                  trackQueue.add({
-                    userId,
-                    event: events.USER_EDITED,
-                  });
-
-                  identifyQueue.add({ userId });
-
                   return result.changes[0].new_val;
                 }
 
                 // an update was triggered from the client, but no data was changed
                 if (result.unchanged === 1) {
-                  trackQueue.add({
-                    userId,
-                    event: events.USER_EDITED_FAILED,
-                    properties: {
-                      reason: 'no changes',
-                    },
-                  });
                   return result.changes[0].old_val;
                 }
               });
@@ -575,11 +504,6 @@ export const setUserPendingEmail = createWriteQuery(
               `Failed to set user pending email to ${pendingEmail} for user ${userId}.`
             );
 
-          trackQueue.add({
-            userId: user.id,
-            event: events.USER_ADDED_EMAIL,
-          });
-
           return user;
         }
       ),
@@ -611,11 +535,6 @@ export const updateUserEmail = createWriteQuery(
             throw new Error(
               `Failed to update user email to ${email} for user ${userId}.`
             );
-
-          trackQueue.add({
-            userId: user.id,
-            event: events.USER_VERIFIED_EMAIL,
-          });
 
           return user;
         }
@@ -666,13 +585,6 @@ export const deleteUser = createWriteQuery((userId: string) => ({
           event: 'deleted',
         });
 
-        trackQueue.add({
-          userId: userId,
-          event: events.USER_DELETED,
-        });
-
-        identifyQueue.add({ userId });
-
         return user;
       }
     ),
@@ -680,7 +592,7 @@ export const deleteUser = createWriteQuery((userId: string) => ({
 }));
 
 /*
-  Occassionally bad actors will show up on Spectrum and become toxic, spam communities, harass others, or violate our code of conduct. We have a safe way to ban these users in a way that respects the integrity of data across the rest of the database.
+  Occasionally bad actors will show up on Spectrum and become toxic, spam communities, harass others, or violate our code of conduct. We have a safe way to ban these users in a way that respects the integrity of data across the rest of the database.
   Do NOT ever `.delete()` a user record from the database!!
 */
 type BanUserType = {
@@ -714,9 +626,6 @@ export const banUser = createWriteQuery((args: BanUserType) => {
           and their DMs cant be seen by other users
         */
 
-        // updates the indentification information in amplitude analytics
-        identifyQueue.add({ userId });
-
         searchQueue.add({
           id: userId,
           type: 'user',
@@ -744,6 +653,35 @@ export const banUser = createWriteQuery((args: BanUserType) => {
             .run();
         }
 
+        const publishedThreadIds = await db
+          .table('threads')
+          .getAll(userId, { index: 'creatorId' })
+          .map(row => row('id'))
+          .run();
+
+        const deletePublishedThreadsPromises =
+          publishedThreadIds && publishedThreadIds.length > 0
+            ? publishedThreadIds.map(id => deleteThread(id, currentUserId))
+            : [];
+
+        const usersThreadsIds = await db
+          .table('usersThreads')
+          .getAll(userId, { index: 'userId' })
+          .map(row => row('threadId'))
+          .run();
+
+        const usersMessagesIds = await db
+          .table('messages')
+          .getAll(...usersThreadsIds, { index: 'threadId' })
+          .filter({ senderId: userId })
+          .map(row => row('id'))
+          .run();
+
+        const deleteSentMessagesPromises =
+          usersMessagesIds && usersMessagesIds.length > 0
+            ? usersMessagesIds.map(id => deleteMessage(currentUserId, id))
+            : [];
+
         return await Promise.all([
           removeUsersCommunityMemberships(userId),
           removeUsersChannelMemberships(userId),
@@ -751,6 +689,8 @@ export const banUser = createWriteQuery((args: BanUserType) => {
           disableAllUsersEmailSettings(userId),
           removeOtherParticipantsDmThreadIds,
           removeDMThreads,
+          ...deletePublishedThreadsPromises,
+          ...deleteSentMessagesPromises,
         ]);
       }),
   };

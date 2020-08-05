@@ -1,7 +1,8 @@
 // @flow
-import React from 'react';
+import React, { useMemo } from 'react';
 import { MentionsInput, Mention } from 'react-mentions';
 import { withApollo } from 'react-apollo';
+import { merge } from 'lodash';
 import { MentionsInputStyle } from './style';
 import MentionSuggestion from './mentionSuggestion';
 import { searchUsersQuery } from 'shared/graphql/queries/search/searchUsers';
@@ -14,11 +15,14 @@ type Props = {
   staticSuggestions?: Array<UserInfoType>,
   client: ApolloClient,
   placeholder?: string,
+  hasAttachment?: boolean,
   onFocus?: Function,
   onBlur?: Function,
   onKeyDown?: Function,
   inputRef?: Function,
   dataCy?: string,
+  networkDisabled?: boolean,
+  style: Object,
 };
 
 const cleanSuggestionUserObject = (user: ?Object) => {
@@ -106,18 +110,31 @@ const SpectrumMentionsInput = (props: Props) => {
     return callback(uniqueResults.slice(0, 8));
   };
 
+  const {
+    dataCy,
+    networkDisabled,
+    staticSuggestions,
+    hasAttachment,
+    ...rest
+  } = props;
+
+  const style = useMemo(() => {
+    return merge({}, props.style, MentionsInputStyle);
+  }, [props.style]);
+
   return (
     <MentionsInput
-      style={MentionsInputStyle}
-      displayTransform={username => `@${username}`}
       markup="@[__id__]"
       data-cy={props.dataCy}
-      {...props}
+      {...rest}
+      style={style}
+      allowSuggestionsAboveCursor
     >
       <Mention
         trigger="@"
         data={searchUsers}
         appendSpaceOnAdd={true}
+        displayTransform={username => `@${username}`}
         renderSuggestion={(
           entry,
           search,

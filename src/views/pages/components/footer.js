@@ -10,9 +10,8 @@ import {
   SocialLinks,
 } from '../style';
 import { Link } from 'react-router-dom';
-import { IconButton } from 'src/components/buttons';
+import Icon from 'src/components/icon';
 import { Logo } from 'src/components/logo';
-import { track, events } from 'src/helpers/analytics';
 
 export default () => {
   return (
@@ -28,14 +27,14 @@ export default () => {
               target="_blank"
               rel="noopener noreferrer"
             >
-              <IconButton glyph="github" hoverColor={'text.reverse'} />
+              <Icon glyph="github" hoverColor={'text.reverse'} />
             </a>
             <a
               href="https://twitter.com/withspectrum"
               target="_blank"
               rel="noopener noreferrer"
             >
-              <IconButton glyph="twitter" hoverColor={'text.reverse'} />
+              <Icon glyph="twitter" hoverColor={'text.reverse'} />
             </a>
           </SocialLinks>
         </Masthead>
@@ -56,16 +55,27 @@ export default () => {
             href="https://github.com/withspectrum/code-of-conduct"
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() =>
-              track(events.CODE_OF_CONDUCT_CLICKED, {
-                location: 'splash page footer',
-              })
-            }
           >
             Code of Conduct
           </a>
-          <Link to="/privacy">Privacy Policy</Link>
-          <Link to="/terms">Terms of Service</Link>
+          <a
+            target="_blank"
+            rel="noopener noreferrer"
+            href={
+              'https://help.github.com/en/github/site-policy/github-privacy-statement'
+            }
+          >
+            Privacy Statement
+          </a>
+          <a
+            target="_blank"
+            rel="noopener noreferrer"
+            href={
+              'https://help.github.com/en/github/site-policy/github-terms-of-service'
+            }
+          >
+            Terms of Service
+          </a>
         </Safety>
       </FooterGrid>
     </Footer>

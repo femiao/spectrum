@@ -77,10 +77,9 @@ class Avatar extends React.Component<AvatarProps> {
         size={size}
         mobileSize={mobilesize}
       >
-        {showOnlineStatus &&
-          user.isOnline && (
-            <OnlineIndicator onlineBorderColor={onlineBorderColor} />
-          )}
+        {showOnlineStatus && user.isOnline && (
+          <OnlineIndicator onlineBorderColor={onlineBorderColor} />
+        )}
         <ConditionalWrap
           condition={!!user.username && isClickable}
           wrap={() => (
@@ -90,6 +89,7 @@ class Avatar extends React.Component<AvatarProps> {
                 size={size}
                 mobilesize={mobilesize}
                 type={'user'}
+                alt={user.name || user.username}
               />
             </AvatarLink>
           )}
@@ -99,6 +99,7 @@ class Avatar extends React.Component<AvatarProps> {
             size={size}
             mobilesize={mobilesize}
             type={'user'}
+            alt={user.name || user.username}
           />
         </ConditionalWrap>
       </Container>

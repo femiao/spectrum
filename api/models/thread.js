@@ -1,19 +1,17 @@
 // @flow
 const { db } = require('shared/db');
 import intersection from 'lodash.intersection';
-import {
-  processReputationEventQueue,
-  trackQueue,
-  searchQueue,
-} from 'shared/bull/queues';
-const { NEW_DOCUMENTS, parseRange } = require('./utils');
+import { processReputationEventQueue, searchQueue } from 'shared/bull/queues';
+const { parseRange, NEW_DOCUMENTS } = require('./utils');
 import { createChangefeed } from 'shared/changefeed-utils';
 import { deleteMessagesInThread } from '../models/message';
 import { turnOffAllThreadNotifications } from '../models/usersThreads';
 import type { PaginationOptions } from '../utils/paginate-arrays';
 import type { DBThread, FileUpload } from 'shared/types';
 import type { Timeframe } from './utils';
-import { events } from 'shared/analytics';
+
+const NOT_WATERCOOLER = thread =>
+  db.not(thread.hasFields('watercooler')).or(thread('watercooler').eq(false));
 
 export const getThread = (threadId: string): Promise<DBThread> => {
   return db
@@ -93,7 +91,9 @@ export const getThreadsByChannels = (
   return db
     .table('threads')
     .getAll(...channelIds, { index: 'channelId' })
-    .filter(thread => db.not(thread.hasFields('deletedAt')))
+    .filter(thread =>
+      db.not(thread.hasFields('deletedAt')).and(NOT_WATERCOOLER(thread))
+    )
     .orderBy(...order)
     .skip(after || 0)
     .limit(first || 999999)
@@ -110,7 +110,7 @@ export const getThreadsByCommunity = (communityId: string): Promise<Array<DBThre
       rightBound: 'open',
     })
     .orderBy({ index: db.desc('communityIdAndLastActive') })
-    .filter(thread => db.not(thread.hasFields('deletedAt')))
+    .filter(thread => db.not(thread.hasFields('deletedAt')).and(NOT_WATERCOOLER(thread)))
     .run();
 };
 
@@ -121,7 +121,7 @@ export const getThreadsByCommunityInTimeframe = (communityId: string, range: Tim
     .table('threads')
     .getAll(communityId, { index: 'communityId' })
     .filter(db.row('createdAt').during(db.now().sub(current), db.now()))
-    .filter(thread => db.not(thread.hasFields('deletedAt')))
+    .filter(thread => db.not(thread.hasFields('deletedAt')).and(NOT_WATERCOOLER(thread)))
     .run();
 };
 
@@ -418,6 +418,19 @@ export const getPublicParticipantThreadsByUser = (evalUser: string, options: Pag
     });
 };
 
+export const getWatercoolerThread = (
+  communityId: string
+): Promise<?DBThread> => {
+  return db
+    .table('threads')
+    .getAll([communityId, true], { index: 'communityIdAndWatercooler' })
+    .run()
+    .then(result => {
+      if (!Array.isArray(result) || result.length === 0) return null;
+      return result[0];
+    });
+};
+
 export const publishThread = (
   // eslint-disable-next-line
   { filesToUpload, ...thread }: Object,
@@ -449,12 +462,6 @@ export const publishThread = (
         event: 'created',
       });
 
-      trackQueue.add({
-        userId,
-        event: events.THREAD_CREATED,
-        context: { threadId: thread.id },
-      });
-
       return thread;
     });
 };
@@ -478,21 +485,6 @@ export const setThreadLock = (threadId: string, value: boolean, userId: string, 
       .run()
       .then(async () => {
         const thread = await getThreadById(threadId)
-
-        const event = value
-          ? byModerator
-            ? events.THREAD_LOCKED_BY_MODERATOR
-            : events.THREAD_LOCKED
-          : byModerator
-            ? events.THREAD_UNLOCKED_BY_MODERATOR
-            : events.THREAD_UNLOCKED
-
-        trackQueue.add({
-          userId,
-          event,
-          context: { threadId }
-        })
-
         return thread
       })
   );
@@ -538,12 +530,6 @@ export const deleteThread = (threadId: string, userId: string): Promise<Boolean>
         event: 'deleted'
       })
 
-      trackQueue.add({
-        userId,
-        event: events.THREAD_DELETED,
-        context: { threadId },
-      });
-
       processReputationEventQueue.add({
         userId: thread.creatorId,
         type: 'thread deleted',
@@ -575,9 +561,11 @@ export const editThread = (input: EditThreadInput, userId: string, shouldUpdate:
       {
         content: input.content,
         modifiedAt: shouldUpdate ? new Date() : null,
+        editedBy: userId,
         edits: db.row('edits').append({
           content: db.row('content'),
           timestamp: new Date(),
+          editedBy: db.row('editedBy').default(db.row('creatorId'))
         }),
       },
       { returnChanges: 'always' }
@@ -594,23 +582,8 @@ export const editThread = (input: EditThreadInput, userId: string, shouldUpdate:
           event: 'edited'
         })
 
-        trackQueue.add({
-          userId,
-          event: events.THREAD_EDITED,
-          context: { threadId: input.threadId }
-        })
-
         return thread;
       }
-
-      trackQueue.add({
-        userId,
-        event: events.THREAD_EDITED_FAILED,
-        context: { threadId: input.threadId },
-        properties: {
-          reason: 'no changes'
-        }
-      })
 
       // an update was triggered from the client, but no data was changed
       return result.changes[0].old_val;
@@ -645,7 +618,7 @@ export const updateThreadWithImages = (id: string, body: string) => {
     });
 };
 
-export const moveThread = (id: string, channelId: string, userId: string) => {
+export const moveThread = (id: string, channelId: string) => {
   return db
     .table('threads')
     .get(id)
@@ -666,23 +639,8 @@ export const moveThread = (id: string, channelId: string, userId: string) => {
           event: 'moved',
         });
 
-        trackQueue.add({
-          userId,
-          event: events.THREAD_MOVED,
-          context: { threadId: id },
-        });
-
         return thread;
       }
-
-      trackQueue.add({
-        userId,
-        event: events.THREAD_MOVED_FAILED,
-        context: { threadId: id },
-        properties: {
-          reason: 'no changes',
-        },
-      });
 
       return null;
     });
@@ -744,7 +702,6 @@ const hasChanged = (field: string) =>
   db
     .row('old_val')(field)
     .ne(db.row('new_val')(field));
-const LAST_ACTIVE_CHANGED = hasChanged('lastActive');
 
 const getUpdatedThreadsChangefeed = () =>
   db
@@ -752,7 +709,19 @@ const getUpdatedThreadsChangefeed = () =>
     .changes({
       includeInitial: false,
     })
-    .filter(NEW_DOCUMENTS.or(LAST_ACTIVE_CHANGED))('new_val')
+    .filter(
+      NEW_DOCUMENTS.or(
+        hasChanged('content')
+          .or(hasChanged('lastActive'))
+          .or(hasChanged('channelId'))
+          .or(hasChanged('communityId'))
+          .or(hasChanged('creatorId'))
+          .or(hasChanged('isPublished'))
+          .or(hasChanged('modifiedAt'))
+          .or(hasChanged('messageCount'))
+          .or(hasChanged('reactionCount'))
+      )
+    )('new_val')
     .run();
 
 export const listenToUpdatedThreads = (cb: Function): Function => {

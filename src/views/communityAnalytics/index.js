@@ -5,14 +5,13 @@ import { connect } from 'react-redux';
 import { Link } from 'react-router-dom';
 import type { GetCommunitySettingsType } from 'shared/graphql/queries/community/getCommunitySettings';
 import ViewError from 'src/components/viewError';
-import { Button, OutlineButton, ButtonRow } from 'src/components/buttons';
+import { Button, OutlineButton } from 'src/components/button';
 import MemberGrowth from './components/memberGrowth';
 import ConversationGrowth from './components/conversationGrowth';
 import TopMembers from './components/topMembers';
 import TopAndNewThreads from './components/topAndNewThreads';
 import { withCurrentUser } from 'src/components/withCurrentUser';
 import { SectionsContainer, Column } from 'src/components/settingsViews/style';
-import { track, events, transformations } from 'src/helpers/analytics';
 import type { Dispatch } from 'redux';
 import { ErrorBoundary, SettingsFallback } from 'src/components/error';
 
@@ -29,15 +28,6 @@ type State = {
 };
 
 class CommunityAnalytics extends React.Component<Props, State> {
-  componentDidMount() {
-    const { community } = this.props;
-    if (community) {
-      track(events.COMMUNITY_ANALYTICS_VIEWED, {
-        community: transformations.analyticsCommunity(community),
-      });
-    }
-  }
-
   render() {
     const { community } = this.props;
 
@@ -73,7 +63,7 @@ class CommunityAnalytics extends React.Component<Props, State> {
           'If you want to create your own community, you can get started below.'
         }
       >
-        <ButtonRow>
+        <div style={{ display: 'flex' }}>
           <Link to={'/'}>
             <OutlineButton large>Take me back</OutlineButton>
           </Link>
@@ -81,7 +71,7 @@ class CommunityAnalytics extends React.Component<Props, State> {
           <Link to={'/new/community'}>
             <Button large>Create a community</Button>
           </Link>
-        </ButtonRow>
+        </div>
       </ViewError>
     );
   }

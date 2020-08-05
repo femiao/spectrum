@@ -1,27 +1,18 @@
 // @flow
 import type { GraphQLContext } from '../../';
-import { convertToRaw } from 'draft-js';
-import { stateFromMarkdown } from 'draft-js-import-markdown';
 import UserError from '../../utils/UserError';
-import {
-  getMessage,
-  editMessage,
-  userHasMessagesInThread,
-  getMessages,
-} from '../../models/message';
-import { setThreadLastActive } from '../../models/thread';
-import { deleteParticipantInThread } from '../../models/usersThreads';
-import { getUserPermissionsInChannel } from '../../models/usersChannels';
-import { getUserPermissionsInCommunity } from '../../models/usersCommunities';
-import { events } from 'shared/analytics';
+import { getMessage, editMessage } from '../../models/message';
 import { isAuthedResolver as requireAuth } from '../../utils/permissions';
-import { trackQueue } from 'shared/bull/queues';
 import { validateRawContentState } from '../../utils/validate-draft-js-input';
+import processMessageContent, {
+  messageTypeObj,
+} from 'shared/draft-utils/process-message-content';
+import type { MessageType } from 'shared/draft-utils/message-types';
 
 type Args = {
   input: {
     id: string,
-    messageType?: 'draftjs' | 'text' | 'media',
+    messageType?: MessageType,
     content: {
       body: string,
     },
@@ -29,71 +20,33 @@ type Args = {
 };
 
 export default requireAuth(async (_: any, args: Args, ctx: GraphQLContext) => {
+  let messageType = args.input.messageType;
   const {
-    input: { id, content, messageType },
+    input: { id, content },
   } = args;
-  const { user, loaders } = ctx;
+  const { user } = ctx;
 
   const message = await getMessage(id);
 
   if (!message) {
-    trackQueue.add({
-      userId: user.id,
-      event: events.MESSAGE_EDITED_FAILED,
-      properties: {
-        reason: 'message not found',
-      },
-    });
     return new UserError('This message does not exist.');
   }
 
   let body = content.body;
-  if (messageType === 'text') {
-    body = JSON.stringify(
-      convertToRaw(
-        stateFromMarkdown(body, {
-          parserOptions: {
-            breaks: true,
-          },
-        })
-      )
-    );
-    messageType === 'draftjs';
+  if (messageType === messageTypeObj.text) {
+    body = processMessageContent(messageTypeObj.text, body);
+    messageType = messageTypeObj.draftjs;
   }
-
-  const eventFailed =
-    message.threadType === 'story'
-      ? events.MESSAGE_EDITED_FAILED
-      : events.DIRECT_MESSAGE_EDITED_FAILED;
-
-  if (messageType === 'draftjs') {
+  if (messageType === messageTypeObj.draftjs) {
     let parsed;
     try {
       parsed = JSON.parse(body);
     } catch (err) {
-      trackQueue.add({
-        userId: user.id,
-        event: eventFailed,
-        properties: {
-          reason: 'invalid draftjs data',
-          message,
-        },
-      });
-
       return new UserError(
         'Please provide serialized raw DraftJS content state as content.body'
       );
     }
-    if (!validateRawContentState(body)) {
-      trackQueue.add({
-        userId: user.id,
-        event: eventFailed,
-        properties: {
-          reason: 'invalid draftjs data',
-          message,
-        },
-      });
-
+    if (!validateRawContentState(parsed)) {
       throw new UserError(
         'Please provide serialized raw DraftJS content state as content.body'
       );
@@ -105,26 +58,14 @@ export default requireAuth(async (_: any, args: Args, ctx: GraphQLContext) => {
   }
 
   if (message.senderId !== user.id) {
-    trackQueue.add({
-      userId: user.id,
-      event: eventFailed,
-      context: { messageId: id },
-      properties: {
-        reason: 'message not sent by user',
-      },
-    });
-
     return new UserError('You can only edit your own messages.');
   }
 
-  return editMessage(
-    {
-      ...args.input,
-      content: {
-        body,
-      },
-      messageType,
+  return editMessage({
+    ...args.input,
+    content: {
+      body,
     },
-    user.id
-  );
+    messageType,
+  });
 });

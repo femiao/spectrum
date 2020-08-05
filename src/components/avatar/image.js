@@ -9,12 +9,13 @@ type Props = {
   size: number,
   mobilesize?: number,
   isClickable?: boolean,
+  alt: string,
 };
 
 export default class Image extends React.Component<Props> {
   render() {
     const { type, size, mobilesize } = this.props;
-    const { isClickable, ...rest } = this.props;
+    const { ...rest } = this.props;
     const fallbackSrc =
       type === 'user'
         ? '/img/default_avatar.svg'

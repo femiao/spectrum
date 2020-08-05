@@ -46,6 +46,10 @@ const GITHUB_OAUTH_CLIENT_ID = IS_PROD
   ? '208a2e8684d88883eded'
   : 'ed3e924f4a599313c83b';
 
+const CALLBACK_BASE = IS_PROD
+  ? 'https://spectrum.chat'
+  : 'http://localhost:3001';
+
 const isSerializedJSON = (str: string) =>
   str[0] === '{' && str[str.length - 1] === '}';
 
@@ -88,9 +92,7 @@ const init = () => {
       {
         consumerKey: TWITTER_OAUTH_CLIENT_ID,
         consumerSecret: TWITTER_OAUTH_CLIENT_SECRET,
-        callbackURL: IS_PROD
-          ? 'https://spectrum.chat/auth/twitter/callback'
-          : 'http://localhost:3001/auth/twitter/callback',
+        callbackURL: `${CALLBACK_BASE}/auth/twitter/callback`,
         includeEmail: true,
       },
       (token, tokenSecret, profile, done) => {
@@ -139,8 +141,9 @@ const init = () => {
             return user;
           })
           .catch(err => {
-            done(err);
-            return null;
+            return done(null, err, {
+              message: 'Please sign in with GitHub to create a new account.',
+            });
           });
       }
     )
@@ -152,7 +155,7 @@ const init = () => {
       {
         clientID: FACEBOOK_OAUTH_CLIENT_ID,
         clientSecret: FACEBOOK_OAUTH_CLIENT_SECRET,
-        callbackURL: '/auth/facebook/callback',
+        callbackURL: `${CALLBACK_BASE}/auth/facebook/callback`,
         profileFields: [
           'id',
           'displayName',
@@ -204,8 +207,9 @@ const init = () => {
             return user;
           })
           .catch(err => {
-            done(err);
-            return null;
+            return done(null, err, {
+              message: 'Please sign in with GitHub to create a new account.',
+            });
           });
       }
     )
@@ -217,7 +221,7 @@ const init = () => {
       {
         clientID: GOOGLE_OAUTH_CLIENT_ID,
         clientSecret: GOOGLE_OAUTH_CLIENT_SECRET,
-        callbackURL: '/auth/google/callback',
+        callbackURL: `${CALLBACK_BASE}/auth/google/callback`,
       },
       (token, tokenSecret, profile, done) => {
         const name =
@@ -268,8 +272,9 @@ const init = () => {
             return user;
           })
           .catch(err => {
-            done(err);
-            return null;
+            return done(null, err, {
+              message: 'Please sign in with GitHub to create a new account.',
+            });
           });
       }
     )
@@ -281,7 +286,7 @@ const init = () => {
       {
         clientID: GITHUB_OAUTH_CLIENT_ID,
         clientSecret: GITHUB_OAUTH_CLIENT_SECRET,
-        callbackURL: '/auth/github/callback',
+        callbackURL: `${CALLBACK_BASE}/auth/github/callback`,
         scope: ['user'],
         passReqToCallback: true,
       },
@@ -294,6 +299,11 @@ const init = () => {
         const githubUsername =
           profile.username || profile._json.login || fallbackUsername;
 
+        const existingUserWithProviderId = await getUserByIndex(
+          'githubProviderId',
+          profile.id
+        );
+
         if (req.user) {
           // if a user exists in the request body, it means the user is already
           // authed and is trying to connect a github account. Before we do so
@@ -302,7 +312,6 @@ const init = () => {
           // 2. The providerId returned from GitHub isnt' being used by another user
 
           // 1
-          // if the user already has a githubProviderId, don't override it
           if (req.user.githubProviderId) {
             /*
               Update the cached content of the github profile that we store
@@ -333,11 +342,6 @@ const init = () => {
             return done(null, req.user);
           }
 
-          const existingUserWithProviderId = await getUserByIndex(
-            'githubProviderId',
-            profile.id
-          );
-
           // 2
           // if no user exists with this provider id, it's safe to save on the req.user's object
           if (!existingUserWithProviderId) {
@@ -359,7 +363,10 @@ const init = () => {
 
           // if a user exists with this provider id, don't do anything and return
           if (existingUserWithProviderId) {
-            return done(null, req.user);
+            return done(null, req.user, {
+              message:
+                'Your GitHub account is already linked to another Spectrum profile.',
+            });
           }
         }
 
